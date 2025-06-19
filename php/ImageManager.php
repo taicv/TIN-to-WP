@@ -1,22 +1,28 @@
 <?php
 
+require_once 'CacheManager.php';
+
 class ImageManager {
     private $unsplashApiKey;
     private $pexelsApiKey;
     private $pixabayApiKey;
     private $downloadDir;
     private $timeout = 30;
+    private $cacheManager;
     
     public function __construct($config = []) {
-        $this->unsplashApiKey = $config['unsplash_api_key'] ?? '';
-        $this->pexelsApiKey = $config['pexels_api_key'] ?? '';
-        $this->pixabayApiKey = $config['pixabay_api_key'] ?? '';
+        $this->unsplashApiKey = $config['unsplash'] ?? '';
+        $this->pexelsApiKey = $config['pexels'] ?? '';
+        $this->pixabayApiKey = $config['pixabay'] ?? '';
         $this->downloadDir = $config['download_dir'] ?? './downloads/images';
         
         // Create download directory if it doesn't exist
         if (!is_dir($this->downloadDir)) {
             mkdir($this->downloadDir, 0755, true);
         }
+        
+        // Initialize cache manager
+        $this->cacheManager = new CacheManager();
     }
     
     /**
@@ -198,38 +204,50 @@ class ImageManager {
      * Search Unsplash API
      */
     private function searchUnsplash($query, $limit = 10) {
+        // Check cache first
+        $cachedResults = $this->cacheManager->getCachedImageSearch($query, 'unsplash');
+        if ($cachedResults) {
+            logInfo("Using cached Unsplash results for query: " . $query);
+            return array_slice($cachedResults, 0, $limit);
+        }
+        
         $url = "https://api.unsplash.com/search/photos";
         $params = [
             'query' => $query,
-            'per_page' => min($limit, 30),
+            'per_page' => $limit,
             'orientation' => 'landscape'
         ];
         
         $headers = [
-            'Authorization: Client-ID ' . $this->unsplashApiKey
+            'Authorization' => 'Client-ID ' . $this->unsplashApiKey
         ];
         
         $response = $this->makeApiRequest($url, $params, $headers);
         
-        if (!$response || !isset($response['results'])) {
+        if (!$response) {
             return [];
         }
         
+        $data = json_decode($response, true);
         $images = [];
-        foreach ($response['results'] as $photo) {
-            $images[] = [
-                'id' => $photo['id'],
-                'url' => $photo['urls']['regular'],
-                'download_url' => $photo['urls']['full'],
-                'alt_text' => $photo['alt_description'] ?? $photo['description'] ?? $query,
-                'width' => $photo['width'],
-                'height' => $photo['height'],
-                'source' => 'unsplash',
-                'attribution' => 'Photo by ' . $photo['user']['name'] . ' on Unsplash',
-                'photographer' => $photo['user']['name'],
-                'photographer_url' => $photo['user']['links']['html']
-            ];
+        
+        if (isset($data['results'])) {
+            foreach ($data['results'] as $photo) {
+                $images[] = [
+                    'url' => $photo['urls']['regular'],
+                    'thumb_url' => $photo['urls']['thumb'],
+                    'alt_text' => $photo['alt_description'] ?? $query,
+                    'width' => $photo['width'],
+                    'height' => $photo['height'],
+                    'source' => 'unsplash',
+                    'photographer' => $photo['user']['name'] ?? '',
+                    'download_url' => $photo['links']['download']
+                ];
+            }
         }
+        
+        // Cache the results
+        $this->cacheManager->cacheImageSearch($query, $images, 'unsplash');
         
         return $images;
     }
@@ -238,38 +256,50 @@ class ImageManager {
      * Search Pexels API
      */
     private function searchPexels($query, $limit = 10) {
+        // Check cache first
+        $cachedResults = $this->cacheManager->getCachedImageSearch($query, 'pexels');
+        if ($cachedResults) {
+            logInfo("Using cached Pexels results for query: " . $query);
+            return array_slice($cachedResults, 0, $limit);
+        }
+        
         $url = "https://api.pexels.com/v1/search";
         $params = [
             'query' => $query,
-            'per_page' => min($limit, 80),
+            'per_page' => $limit,
             'orientation' => 'landscape'
         ];
         
         $headers = [
-            'Authorization: ' . $this->pexelsApiKey
+            'Authorization' => $this->pexelsApiKey
         ];
         
         $response = $this->makeApiRequest($url, $params, $headers);
         
-        if (!$response || !isset($response['photos'])) {
+        if (!$response) {
             return [];
         }
         
+        $data = json_decode($response, true);
         $images = [];
-        foreach ($response['photos'] as $photo) {
-            $images[] = [
-                'id' => $photo['id'],
-                'url' => $photo['src']['large'],
-                'download_url' => $photo['src']['original'],
-                'alt_text' => $photo['alt'] ?? $query,
-                'width' => $photo['width'],
-                'height' => $photo['height'],
-                'source' => 'pexels',
-                'attribution' => 'Photo by ' . $photo['photographer'] . ' on Pexels',
-                'photographer' => $photo['photographer'],
-                'photographer_url' => $photo['photographer_url']
-            ];
+        
+        if (isset($data['photos'])) {
+            foreach ($data['photos'] as $photo) {
+                $images[] = [
+                    'url' => $photo['src']['large'],
+                    'thumb_url' => $photo['src']['medium'],
+                    'alt_text' => $photo['alt'] ?? $query,
+                    'width' => $photo['width'],
+                    'height' => $photo['height'],
+                    'source' => 'pexels',
+                    'photographer' => $photo['photographer'] ?? '',
+                    'download_url' => $photo['src']['original']
+                ];
+            }
         }
+        
+        // Cache the results
+        $this->cacheManager->cacheImageSearch($query, $images, 'pexels');
         
         return $images;
     }
@@ -278,76 +308,95 @@ class ImageManager {
      * Search Pixabay API
      */
     private function searchPixabay($query, $limit = 10) {
+        // Check cache first
+        $cachedResults = $this->cacheManager->getCachedImageSearch($query, 'pixabay');
+        if ($cachedResults) {
+            logInfo("Using cached Pixabay results for query: " . $query);
+            return array_slice($cachedResults, 0, $limit);
+        }
+        
         $url = "https://pixabay.com/api/";
         $params = [
             'key' => $this->pixabayApiKey,
             'q' => $query,
+            'per_page' => $limit,
             'image_type' => 'photo',
-            'orientation' => 'horizontal',
-            'per_page' => min($limit, 200),
-            'safesearch' => 'true'
+            'orientation' => 'horizontal'
         ];
         
         $response = $this->makeApiRequest($url, $params);
         
-        if (!$response || !isset($response['hits'])) {
+        if (!$response) {
             return [];
         }
         
+        $data = json_decode($response, true);
         $images = [];
-        foreach ($response['hits'] as $photo) {
-            $images[] = [
-                'id' => $photo['id'],
-                'url' => $photo['webformatURL'],
-                'download_url' => $photo['largeImageURL'],
-                'alt_text' => $photo['tags'] ?? $query,
-                'width' => $photo['imageWidth'],
-                'height' => $photo['imageHeight'],
-                'source' => 'pixabay',
-                'attribution' => 'Image by ' . $photo['user'] . ' from Pixabay',
-                'photographer' => $photo['user'],
-                'photographer_url' => 'https://pixabay.com/users/' . $photo['user'] . '-' . $photo['user_id'] . '/'
-            ];
+        
+        if (isset($data['hits'])) {
+            foreach ($data['hits'] as $photo) {
+                $images[] = [
+                    'url' => $photo['webformatURL'],
+                    'thumb_url' => $photo['previewURL'],
+                    'alt_text' => $photo['tags'] ?? $query,
+                    'width' => $photo['webformatWidth'],
+                    'height' => $photo['webformatHeight'],
+                    'source' => 'pixabay',
+                    'photographer' => $photo['user'] ?? '',
+                    'download_url' => $photo['largeImageURL']
+                ];
+            }
         }
+        
+        // Cache the results
+        $this->cacheManager->cacheImageSearch($query, $images, 'pixabay');
         
         return $images;
     }
     
     /**
-     * Download image to local storage
+     * Download image from URL
      */
     public function downloadImage($imageData) {
-        try {
-            $imageUrl = $imageData['download_url'];
-            $fileName = $this->generateFileName($imageData);
-            $localPath = $this->downloadDir . '/' . $fileName;
-            
-            // Download image
-            $imageContent = $this->downloadFile($imageUrl);
-            
-            if (!$imageContent) {
-                return null;
-            }
-            
-            // Save to local file
-            if (file_put_contents($localPath, $imageContent) === false) {
-                return null;
-            }
-            
-            // Optimize image if needed
-            $this->optimizeImage($localPath);
-            
+        // Check cache first
+        $cachedPath = $this->cacheManager->getCachedImage($imageData['url']);
+        if ($cachedPath) {
+            logInfo("Using cached image: " . basename($cachedPath));
             return [
-                'local_path' => $localPath,
-                'file_name' => $fileName,
-                'file_size' => filesize($localPath),
-                'original_url' => $imageUrl
+                'local_path' => $cachedPath,
+                'cached' => true
             ];
-            
-        } catch (Exception $e) {
-            error_log("Image download error: " . $e->getMessage());
-            return null;
         }
+        
+        $downloadUrl = $imageData['download_url'] ?? $imageData['url'];
+        $fileName = $this->generateFileName($imageData);
+        $localPath = $this->downloadDir . '/' . $fileName;
+        
+        $imageContent = $this->downloadFile($downloadUrl);
+        
+        if ($imageContent === false) {
+            return false;
+        }
+        
+        if (file_put_contents($localPath, $imageContent) === false) {
+            return false;
+        }
+        
+        // Optimize image if possible
+        $this->optimizeImage($localPath);
+        
+        // Cache the image
+        $this->cacheManager->cacheImage($imageData['url'], $localPath, [
+            'source' => $imageData['source'] ?? 'unknown',
+            'width' => $imageData['width'] ?? 0,
+            'height' => $imageData['height'] ?? 0,
+            'file_size' => filesize($localPath)
+        ]);
+        
+        return [
+            'local_path' => $localPath,
+            'cached' => false
+        ];
     }
     
     /**

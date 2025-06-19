@@ -1,12 +1,16 @@
 <?php
 
+require_once 'CacheManager.php';
+
 class VietnamBusinessCollector {
     private $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
     private $timeout = 30;
     private $maxRetries = 3;
+    private $cacheManager;
     
     public function __construct() {
-        // Initialize any required settings
+        // Initialize cache manager
+        $this->cacheManager = new CacheManager();
     }
     
     /**
@@ -15,6 +19,13 @@ class VietnamBusinessCollector {
      * @return array Business information array
      */
     public function collectBusinessInfo($taxCode) {
+        // Check cache first
+        $cachedData = $this->cacheManager->getCachedBusinessData($taxCode);
+        if ($cachedData) {
+            logInfo("Using cached business data for tax code: " . $taxCode);
+            return $cachedData;
+        }
+        
         $businessInfo = [
             'tax_code' => $taxCode,
             'company_name' => '',
@@ -58,6 +69,9 @@ class VietnamBusinessCollector {
             $businessInfo = array_merge($businessInfo, $enhancedData);
         }
         
+        // Cache the business data
+        $this->cacheManager->cacheBusinessData($taxCode, $businessInfo, $businessInfo['source']);
+        
         return $businessInfo;
     }
     
@@ -65,6 +79,15 @@ class VietnamBusinessCollector {
      * Collect data from official Vietnam business portal
      */
     private function collectFromOfficialPortal($taxCode) {
+        $cacheKey = 'official_portal_' . $taxCode;
+        
+        // Check cache first
+        $cachedResponse = $this->cacheManager->getCachedAPIResponse($cacheKey);
+        if ($cachedResponse) {
+            logInfo("Using cached official portal response for tax code: " . $taxCode);
+            return $this->parseOfficialPortalResponse($cachedResponse, $taxCode);
+        }
+        
         $data = [];
         
         // Note: The official portal search functionality appears to have issues
@@ -88,6 +111,13 @@ class VietnamBusinessCollector {
         curl_close($ch);
         
         if ($httpCode === 200 && $response) {
+            // Cache the API response
+            $this->cacheManager->cacheAPIResponse($cacheKey, $response, [
+                'source' => 'official_portal',
+                'tax_code' => $taxCode,
+                'http_code' => $httpCode
+            ]);
+            
             // Parse the response and extract business information
             $data = $this->parseOfficialPortalResponse($response, $taxCode);
         }
@@ -99,6 +129,15 @@ class VietnamBusinessCollector {
      * Collect data using web search engines
      */
     private function collectFromWebSearch($taxCode) {
+        $cacheKey = 'web_search_' . $taxCode;
+        
+        // Check cache first
+        $cachedResults = $this->cacheManager->getCachedAPIResponse($cacheKey);
+        if ($cachedResults) {
+            logInfo("Using cached web search results for tax code: " . $taxCode);
+            return $this->extractBusinessInfoFromSearchResults($cachedResults, $taxCode);
+        }
+        
         $data = [];
         
         // Search for the tax code on various search engines
@@ -108,8 +147,12 @@ class VietnamBusinessCollector {
             "mã số thuế \"$taxCode\" Vietnam"
         ];
         
+        $allSearchResults = '';
+        
         foreach ($searchQueries as $query) {
             $searchResults = $this->performWebSearch($query);
+            $allSearchResults .= $searchResults . "\n\n";
+            
             $extractedData = $this->extractBusinessInfoFromSearchResults($searchResults, $taxCode);
             
             if (!empty($extractedData['company_name'])) {
@@ -118,6 +161,13 @@ class VietnamBusinessCollector {
             }
         }
         
+        // Cache the web search results
+        $this->cacheManager->cacheAPIResponse($cacheKey, $allSearchResults, [
+            'source' => 'web_search',
+            'tax_code' => $taxCode,
+            'queries' => $searchQueries
+        ]);
+        
         return $data;
     }
     
@@ -125,6 +175,15 @@ class VietnamBusinessCollector {
      * Collect data from business directories
      */
     private function collectFromBusinessDirectories($taxCode) {
+        $cacheKey = 'business_directories_' . $taxCode;
+        
+        // Check cache first
+        $cachedResults = $this->cacheManager->getCachedAPIResponse($cacheKey);
+        if ($cachedResults) {
+            logInfo("Using cached business directory results for tax code: " . $taxCode);
+            return $this->extractBusinessInfoFromSearchResults($cachedResults, $taxCode);
+        }
+        
         $data = [];
         
         // List of business directory websites to check
@@ -134,17 +193,29 @@ class VietnamBusinessCollector {
             'https://www.vietbiz.com.vn/'
         ];
         
+        $allDirectoryResults = '';
+        
         foreach ($directories as $directory) {
             try {
                 $directoryData = $this->searchBusinessDirectory($directory, $taxCode);
-                if (!empty($directoryData['company_name'])) {
-                    $data = array_merge($data, $directoryData);
+                $allDirectoryResults .= $directoryData . "\n\n";
+                
+                $extractedData = $this->extractBusinessInfoFromSearchResults($directoryData, $taxCode);
+                if (!empty($extractedData['company_name'])) {
+                    $data = array_merge($data, $extractedData);
                     break;
                 }
             } catch (Exception $e) {
                 continue;
             }
         }
+        
+        // Cache the business directory results
+        $this->cacheManager->cacheAPIResponse($cacheKey, $allDirectoryResults, [
+            'source' => 'business_directories',
+            'tax_code' => $taxCode,
+            'directories' => $directories
+        ]);
         
         return $data;
     }
@@ -153,12 +224,22 @@ class VietnamBusinessCollector {
      * Enhance business data with additional web search
      */
     private function enhanceWithWebSearch($businessInfo) {
-        $enhancedData = [];
         $companyName = $businessInfo['company_name'];
         
         if (empty($companyName)) {
-            return $enhancedData;
+            return [];
         }
+        
+        $cacheKey = 'enhancement_' . md5($companyName);
+        
+        // Check cache first
+        $cachedResults = $this->cacheManager->getCachedAPIResponse($cacheKey);
+        if ($cachedResults) {
+            logInfo("Using cached enhancement data for company: " . $companyName);
+            return $this->extractEnhancementData($cachedResults, $companyName);
+        }
+        
+        $enhancedData = [];
         
         // Search for additional information about the company
         $enhancementQueries = [
@@ -168,11 +249,22 @@ class VietnamBusinessCollector {
             "\"$companyName\" Vietnam address location"
         ];
         
+        $allEnhancementResults = '';
+        
         foreach ($enhancementQueries as $query) {
             $searchResults = $this->performWebSearch($query);
+            $allEnhancementResults .= $searchResults . "\n\n";
+            
             $extractedData = $this->extractEnhancementData($searchResults, $companyName);
             $enhancedData = array_merge($enhancedData, $extractedData);
         }
+        
+        // Cache the enhancement results
+        $this->cacheManager->cacheAPIResponse($cacheKey, $allEnhancementResults, [
+            'source' => 'enhancement_search',
+            'company_name' => $companyName,
+            'queries' => $enhancementQueries
+        ]);
         
         return $enhancedData;
     }
@@ -181,6 +273,15 @@ class VietnamBusinessCollector {
      * Perform web search using search engines
      */
     private function performWebSearch($query) {
+        $cacheKey = 'web_search_' . md5($query);
+        
+        // Check cache first
+        $cachedResponse = $this->cacheManager->getCachedAPIResponse($cacheKey);
+        if ($cachedResponse) {
+            logInfo("Using cached web search response for query: " . $query);
+            return $cachedResponse;
+        }
+        
         // Use DuckDuckGo or other search engines that allow programmatic access
         $searchUrl = "https://duckduckgo.com/html/?q=" . urlencode($query);
         
@@ -195,7 +296,17 @@ class VietnamBusinessCollector {
         ]);
         
         $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        
+        if ($httpCode === 200 && $response) {
+            // Cache the search response
+            $this->cacheManager->cacheAPIResponse($cacheKey, $response, [
+                'source' => 'duckduckgo',
+                'query' => $query,
+                'http_code' => $httpCode
+            ]);
+        }
         
         return $response;
     }

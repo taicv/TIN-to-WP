@@ -444,6 +444,164 @@ const Utils = {
             
             return errors.length === 0;
         }
+    },
+
+    // Debug functionality
+    debug: {
+        panel: null,
+        errors: [],
+        apiResponses: [],
+        webSocketEvents: [],
+        progressData: [],
+        maxEntries: 50,
+
+        init() {
+            this.panel = document.getElementById('debugPanel');
+            this.errorsContainer = document.getElementById('debugErrors');
+            this.apiContainer = document.getElementById('debugApi');
+            this.webSocketContainer = document.getElementById('debugWebSocket');
+            this.progressContainer = document.getElementById('debugProgress');
+        },
+
+        log(type, message, data = null) {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = {
+                timestamp,
+                type,
+                message,
+                data
+            };
+
+            switch (type) {
+                case 'error':
+                    this.errors.unshift(entry);
+                    if (this.errors.length > this.maxEntries) {
+                        this.errors.pop();
+                    }
+                    this.updateErrorsDisplay();
+                    break;
+                case 'api':
+                    this.apiResponses.unshift(entry);
+                    if (this.apiResponses.length > this.maxEntries) {
+                        this.apiResponses.pop();
+                    }
+                    this.updateApiDisplay();
+                    break;
+                case 'websocket':
+                    this.webSocketEvents.unshift(entry);
+                    if (this.webSocketEvents.length > this.maxEntries) {
+                        this.webSocketEvents.pop();
+                    }
+                    this.updateWebSocketDisplay();
+                    break;
+                case 'progress':
+                    this.progressData.unshift(entry);
+                    if (this.progressData.length > this.maxEntries) {
+                        this.progressData.pop();
+                    }
+                    this.updateProgressDisplay();
+                    break;
+                case 'info':
+                    // Log info to console only
+                    console.log(`[DEBUG INFO] ${message}`, data);
+                    break;
+            }
+
+            // Also log to console for all types
+            if (type !== 'info') {
+                console.log(`[DEBUG ${type.toUpperCase()}]`, message, data);
+            }
+        },
+
+        updateErrorsDisplay() {
+            if (!this.errorsContainer) return;
+            
+            this.errorsContainer.innerHTML = this.errors.map(entry => `
+                <div class="error">
+                    <strong>${entry.timestamp}</strong>: ${entry.message}
+                    ${entry.data ? `<br><small>${JSON.stringify(entry.data, null, 2)}</small>` : ''}
+                </div>
+            `).join('');
+        },
+
+        updateApiDisplay() {
+            if (!this.apiContainer) return;
+            
+            this.apiContainer.innerHTML = this.apiResponses.map(entry => `
+                <div class="info">
+                    <strong>${entry.timestamp}</strong>: ${entry.message}
+                    ${entry.data ? `<br><small>${JSON.stringify(entry.data, null, 2)}</small>` : ''}
+                </div>
+            `).join('');
+        },
+
+        updateWebSocketDisplay() {
+            if (!this.webSocketContainer) return;
+            
+            this.webSocketContainer.innerHTML = this.webSocketEvents.map(entry => `
+                <div class="info">
+                    <strong>${entry.timestamp}</strong>: ${entry.message}
+                    ${entry.data ? `<br><small>${JSON.stringify(entry.data, null, 2)}</small>` : ''}
+                </div>
+            `).join('');
+        },
+
+        updateProgressDisplay() {
+            if (!this.progressContainer) return;
+            
+            this.progressContainer.innerHTML = this.progressData.map(entry => {
+                const data = entry.data;
+                let html = `<div class="info">
+                    <strong>${entry.timestamp}</strong>: ${entry.message}`;
+                
+                if (data && data.debug_info) {
+                    const debugInfo = data.debug_info;
+                    html += `<br><div class="debug-details">
+                        <strong>Step:</strong> ${debugInfo.current_step} (${debugInfo.step_progress}%)<br>
+                        <strong>Status:</strong> ${debugInfo.status_message}<br>
+                        <strong>Last Updated:</strong> ${debugInfo.last_updated}`;
+                    
+                    if (debugInfo.step_details && debugInfo.step_details.step) {
+                        const stepDetails = debugInfo.step_details;
+                        html += `<br><strong>Step Details:</strong> ${stepDetails.description}`;
+                        
+                        if (stepDetails.step === 'business') {
+                            html += `<br><strong>Cache Status:</strong> ${stepDetails.cache_status}`;
+                            if (stepDetails.api_responses) {
+                                html += `<br><strong>API Sources:</strong> `;
+                                const sources = Object.entries(stepDetails.api_responses).map(([source, info]) => 
+                                    `${source}: ${info.cached ? 'cached' : info.status}`
+                                ).join(', ');
+                                html += sources;
+                            }
+                        }
+                    }
+                    
+                    if (debugInfo.recent_logs && debugInfo.recent_logs.length > 0) {
+                        html += `<br><strong>Recent Logs:</strong><br>`;
+                        debugInfo.recent_logs.slice(0, 3).forEach(log => {
+                            html += `<small>${log.timestamp}: ${log.message}</small><br>`;
+                        });
+                    }
+                    
+                    html += `</div>`;
+                }
+                
+                html += `</div>`;
+                return html;
+            }).join('');
+        },
+
+        clear() {
+            this.errors = [];
+            this.apiResponses = [];
+            this.webSocketEvents = [];
+            this.progressData = [];
+            this.updateErrorsDisplay();
+            this.updateApiDisplay();
+            this.updateWebSocketDisplay();
+            this.updateProgressDisplay();
+        }
     }
 };
 

@@ -1,6 +1,7 @@
 <?php
 
 require_once 'vendor/autoload.php';
+require_once 'CacheManager.php';
 
 use OpenAI\Client;
 use OpenAI\Factory;
@@ -9,9 +10,32 @@ class AIContentGenerator {
     private $client;
     private $model = 'gpt-4o';
     private $maxTokens = 4000;
+    private $cacheManager;
     
-    public function __construct($apiKey) {
-        $this->client = (new Factory())->withApiKey($apiKey)->make();
+    public function __construct($apiKey, $endpoint = null) {
+        // Create custom HTTP client to handle SSL certificate issues
+        $httpClient = new \GuzzleHttp\Client([
+            'verify' => false, // Disable SSL verification for development
+            'timeout' => 30,
+            'headers' => [
+                'User-Agent' => 'WordPress Website Generator/1.0'
+            ]
+        ]);
+        
+        // Build the factory configuration
+        $factory = (new Factory())
+            ->withApiKey($apiKey)
+            ->withHttpClient($httpClient);
+        
+        // Add custom endpoint if provided
+        if ($endpoint) {
+            $factory = $factory->withBaseUri($endpoint);
+        }
+        
+        $this->client = $factory->make();
+        
+        // Initialize cache manager
+        $this->cacheManager = new CacheManager();
     }
     
     /**
@@ -55,6 +79,15 @@ class AIContentGenerator {
      * Generate sitemap structure based on business information
      */
     public function generateSitemap($businessInfo) {
+        $cacheKey = 'sitemap_' . md5(json_encode($businessInfo));
+        
+        // Check cache first
+        $cachedSitemap = $this->cacheManager->getCachedAIResponse($cacheKey);
+        if ($cachedSitemap) {
+            logInfo("Using cached sitemap for business: " . ($businessInfo['company_name'] ?? 'Unknown'));
+            return $cachedSitemap;
+        }
+        
         $prompt = $this->buildSitemapPrompt($businessInfo);
         
         $response = $this->client->chat()->create([
@@ -77,6 +110,14 @@ class AIContentGenerator {
             throw new Exception('Failed to parse sitemap JSON: ' . json_last_error_msg());
         }
         
+        // Cache the sitemap response
+        $this->cacheManager->cacheAIResponse($cacheKey, $sitemap, [
+            'business_info' => $businessInfo,
+            'model' => $this->model,
+            'prompt_length' => strlen($prompt),
+            'response_length' => strlen($sitemapJson)
+        ]);
+        
         return $sitemap;
     }
     
@@ -84,6 +125,15 @@ class AIContentGenerator {
      * Generate content for a specific page
      */
     public function generatePageContent($businessInfo, $pageInfo, $colorPalette) {
+        $cacheKey = 'page_content_' . md5(json_encode($businessInfo) . json_encode($pageInfo) . $colorPalette);
+        
+        // Check cache first
+        $cachedContent = $this->cacheManager->getCachedAIResponse($cacheKey);
+        if ($cachedContent) {
+            logInfo("Using cached page content for: " . $pageInfo['title']);
+            return $cachedContent;
+        }
+        
         $prompt = $this->buildPageContentPrompt($businessInfo, $pageInfo, $colorPalette);
         
         $response = $this->client->chat()->create([
@@ -98,19 +148,40 @@ class AIContentGenerator {
         
         $content = $response->choices[0]->message->content;
         
-        return [
+        $pageContent = [
             'title' => $pageInfo['title'],
             'slug' => $pageInfo['slug'],
             'meta_description' => $this->generateMetaDescription($businessInfo, $pageInfo),
             'content' => $content,
             'generated_at' => date('Y-m-d H:i:s')
         ];
+        
+        // Cache the page content response
+        $this->cacheManager->cacheAIResponse($cacheKey, $pageContent, [
+            'business_info' => $businessInfo,
+            'page_info' => $pageInfo,
+            'color_palette' => $colorPalette,
+            'model' => $this->model,
+            'prompt_length' => strlen($prompt),
+            'response_length' => strlen($content)
+        ]);
+        
+        return $pageContent;
     }
     
     /**
      * Generate blog articles
      */
     public function generateBlogArticles($businessInfo) {
+        $cacheKey = 'blog_articles_' . md5(json_encode($businessInfo));
+        
+        // Check cache first
+        $cachedArticles = $this->cacheManager->getCachedAIResponse($cacheKey);
+        if ($cachedArticles) {
+            logInfo("Using cached blog articles for business: " . ($businessInfo['company_name'] ?? 'Unknown'));
+            return $cachedArticles;
+        }
+        
         $articles = [];
         $topics = $this->generateBlogTopics($businessInfo);
         
@@ -119,6 +190,13 @@ class AIContentGenerator {
             $articles[] = $article;
         }
         
+        // Cache the blog articles response
+        $this->cacheManager->cacheAIResponse($cacheKey, $articles, [
+            'business_info' => $businessInfo,
+            'topics_count' => count($topics),
+            'articles_count' => count($articles)
+        ]);
+        
         return $articles;
     }
     
@@ -126,6 +204,15 @@ class AIContentGenerator {
      * Generate blog topics based on business information
      */
     private function generateBlogTopics($businessInfo) {
+        $cacheKey = 'blog_topics_' . md5(json_encode($businessInfo));
+        
+        // Check cache first
+        $cachedTopics = $this->cacheManager->getCachedAIResponse($cacheKey);
+        if ($cachedTopics) {
+            logInfo("Using cached blog topics for business: " . ($businessInfo['company_name'] ?? 'Unknown'));
+            return $cachedTopics;
+        }
+        
         $prompt = $this->buildBlogTopicsPrompt($businessInfo);
         
         $response = $this->client->chat()->create([
@@ -147,6 +234,14 @@ class AIContentGenerator {
             $topics = $this->getFallbackBlogTopics($businessInfo);
         }
         
+        // Cache the blog topics response
+        $this->cacheManager->cacheAIResponse($cacheKey, $topics, [
+            'business_info' => $businessInfo,
+            'model' => $this->model,
+            'prompt_length' => strlen($prompt),
+            'response_length' => strlen($topicsJson)
+        ]);
+        
         return $topics;
     }
     
@@ -154,6 +249,15 @@ class AIContentGenerator {
      * Generate a single blog article
      */
     private function generateSingleBlogArticle($businessInfo, $topic) {
+        $cacheKey = 'blog_article_' . md5(json_encode($businessInfo) . json_encode($topic));
+        
+        // Check cache first
+        $cachedArticle = $this->cacheManager->getCachedAIResponse($cacheKey);
+        if ($cachedArticle) {
+            logInfo("Using cached blog article: " . $topic['title']);
+            return $cachedArticle;
+        }
+        
         $prompt = $this->buildBlogArticlePrompt($businessInfo, $topic);
         
         $response = $this->client->chat()->create([
@@ -168,7 +272,7 @@ class AIContentGenerator {
         
         $content = $response->choices[0]->message->content;
         
-        return [
+        $article = [
             'title' => $topic['title'],
             'slug' => $this->generateSlug($topic['title']),
             'meta_description' => $topic['meta_description'] ?? $this->generateBlogMetaDescription($topic['title']),
@@ -177,6 +281,17 @@ class AIContentGenerator {
             'tags' => $topic['tags'] ?? [],
             'generated_at' => date('Y-m-d H:i:s')
         ];
+        
+        // Cache the blog article response
+        $this->cacheManager->cacheAIResponse($cacheKey, $article, [
+            'business_info' => $businessInfo,
+            'topic' => $topic,
+            'model' => $this->model,
+            'prompt_length' => strlen($prompt),
+            'response_length' => strlen($content)
+        ]);
+        
+        return $article;
     }
     
     /**
@@ -467,12 +582,41 @@ Do not include HTML tags, only Markdown formatting.";
         
         return $outputDir;
     }
+    
+    /**
+     * Test API connection with a simple request
+     * @return bool True if connection successful
+     */
+    public function testConnection() {
+        try {
+            $response = $this->client->chat()->create([
+                'model' => $this->model,
+                'messages' => [
+                    ['role' => 'user', 'content' => 'Hello! Please respond with "Connection test successful"']
+                ],
+                'max_tokens' => 50,
+                'temperature' => 0.1
+            ]);
+            
+            $content = $response->choices[0]->message->content;
+            return !empty($content);
+        } catch (Exception $e) {
+            error_log("API connection test failed: " . $e->getMessage());
+            return false;
+        }
+    }
 }
 
 // Usage example
 /*
-$apiKey = getenv('OPENAI_API_KEY');
-$generator = new AIContentGenerator($apiKey);
+// Load configuration
+require_once 'config.php';
+
+$apiKey = OPENAI_API_KEY;
+$endpoint = OPENAI_API_ENDPOINT;
+
+// Initialize with custom endpoint
+$generator = new AIContentGenerator($apiKey, $endpoint);
 
 // Assuming $businessInfo comes from VietnamBusinessCollector
 $businessInfo = [

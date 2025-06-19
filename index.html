@@ -388,6 +388,39 @@
         </footer>
     </div>
 
+    <!-- Debug Panel (Development Only) -->
+    <div id="debugPanel" class="debug-panel" style="display: none;">
+        <div class="debug-header">
+            <h3>Debug Information</h3>
+            <button onclick="toggleDebugPanel()" class="debug-toggle">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="debug-content">
+            <div class="debug-section">
+                <h4>Recent Errors</h4>
+                <div id="debugErrors" class="debug-log"></div>
+            </div>
+            <div class="debug-section">
+                <h4>API Responses</h4>
+                <div id="debugApi" class="debug-log"></div>
+            </div>
+            <div class="debug-section">
+                <h4>WebSocket Events</h4>
+                <div id="debugWebSocket" class="debug-log"></div>
+            </div>
+            <div class="debug-section">
+                <h4>Progress Tracking</h4>
+                <div id="debugProgress" class="debug-log"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Debug Toggle Button -->
+    <button id="debugToggle" class="debug-toggle-btn" onclick="toggleDebugPanel()">
+        <i class="fas fa-bug"></i>
+    </button>
+
     <!-- Scripts -->
     <script src="js/utils.js"></script>
     <script src="js/api.js"></script>

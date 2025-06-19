@@ -3,8 +3,16 @@ const API = {
     baseUrl: 'php/',
     
     // Make HTTP request
-    async request(endpoint, options = {}) {
-        const url = `${this.baseUrl}${endpoint}`;
+    async request(endpoint, options = {}, queryParams = {}) {
+        let url = `${this.baseUrl}${endpoint}`;
+        
+        // Add query parameters for GET requests
+        if (options.method === 'GET' && Object.keys(queryParams).length > 0) {
+            const urlObj = new URL(url, window.location.origin);
+            Object.keys(queryParams).forEach(key => urlObj.searchParams.append(key, queryParams[key]));
+            url = urlObj.pathname + urlObj.search;
+        }
+        
         const config = {
             headers: {
                 'Content-Type': 'application/json',
@@ -15,27 +23,76 @@ const API = {
         
         try {
             const response = await fetch(url, config);
-            const data = await response.json();
+            
+            // Log response details for debugging
+            console.log('API Response:', {
+                url: url,
+                status: response.status,
+                statusText: response.statusText,
+                headers: Object.fromEntries(response.headers.entries())
+            });
+            
+            // Log to debug panel
+            if (Utils.debug) {
+                Utils.debug.log('api', `API Response: ${response.status} ${response.statusText}`, {
+                    url: url,
+                    status: response.status,
+                    statusText: response.statusText
+                });
+            }
+            
+            let data;
+            const contentType = response.headers.get('content-type');
+            
+            if (contentType && contentType.includes('application/json')) {
+                data = await response.json();
+            } else {
+                const text = await response.text();
+                console.warn('Non-JSON response received:', text);
+                throw new Error('Invalid response format - expected JSON');
+            }
             
             if (!response.ok) {
-                throw new Error(data.message || `HTTP error! status: ${response.status}`);
+                const errorMessage = data.message || data.error || `HTTP error! status: ${response.status}`;
+                const error = new Error(errorMessage);
+                error.status = response.status;
+                error.response = data;
+                throw error;
             }
             
             return data;
         } catch (error) {
-            console.error('API request failed:', error);
+            console.error('API request failed:', {
+                url: url,
+                error: error.message,
+                status: error.status,
+                response: error.response
+            });
+            
+            // Log to debug panel
+            if (Utils.debug) {
+                Utils.debug.log('error', 'API request failed', {
+                    url: url,
+                    error: error.message,
+                    status: error.status,
+                    response: error.response
+                });
+            }
+            
+            // Enhance error with more context
+            if (!error.status) {
+                error.status = 'NETWORK_ERROR';
+            }
+            
             throw error;
         }
     },
     
     // GET request
     async get(endpoint, params = {}) {
-        const url = new URL(`${this.baseUrl}${endpoint}`, window.location.origin);
-        Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
-        
-        return this.request(url.pathname + url.search, {
+        return this.request(endpoint, {
             method: 'GET'
-        });
+        }, params);
     },
     
     // POST request
@@ -239,46 +296,123 @@ class WebSocketManager {
         this.listeners = new Map();
     }
     
+    // Check if WebSocket server is available
+    async checkWebSocketAvailability() {
+        try {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            return new Promise((resolve) => {
+                const testWs = new WebSocket(wsUrl);
+                const timeout = setTimeout(() => {
+                    testWs.close();
+                    resolve(false);
+                }, 3000); // 3 second timeout
+                
+                testWs.onopen = () => {
+                    clearTimeout(timeout);
+                    testWs.close();
+                    resolve(true);
+                };
+                
+                testWs.onerror = () => {
+                    clearTimeout(timeout);
+                    resolve(false);
+                };
+            });
+        } catch (error) {
+            console.warn('WebSocket availability check failed:', error);
+            return false;
+        }
+    }
+    
     connect(sessionId) {
         try {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws?session=${sessionId}`;
             
+            console.log('Attempting WebSocket connection to:', wsUrl);
+            
+            // Check if WebSocket is supported
+            if (!window.WebSocket) {
+                console.warn('WebSocket not supported in this browser');
+                this.emit('error', { message: 'WebSocket not supported in this browser' });
+                return;
+            }
+            
             this.ws = new WebSocket(wsUrl);
             
+            // Set a connection timeout
+            const connectionTimeout = setTimeout(() => {
+                if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+                    console.warn('WebSocket connection timeout');
+                    this.ws.close();
+                    this.emit('error', { message: 'WebSocket connection timeout' });
+                }
+            }, 5000); // 5 second timeout
+            
             this.ws.onopen = () => {
-                console.log('WebSocket connected');
+                clearTimeout(connectionTimeout);
+                console.log('WebSocket connected successfully');
+                this.isConnected = true;
                 this.reconnectAttempts = 0;
+                
+                // Log to debug panel
+                if (Utils.debug) {
+                    Utils.debug.log('websocket', 'WebSocket connected', { sessionId });
+                }
+                
                 this.emit('connected');
             };
             
             this.ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    this.emit('message', data);
+                    console.log('WebSocket message received:', data);
                     
-                    // Emit specific event types
-                    if (data.type) {
-                        this.emit(data.type, data);
+                    // Log to debug panel
+                    if (Utils.debug) {
+                        Utils.debug.log('websocket', 'Message received', data);
                     }
+                    
+                    this.emit(data.type || 'message', data);
                 } catch (error) {
                     console.error('Failed to parse WebSocket message:', error);
+                    
+                    // Log to debug panel
+                    if (Utils.debug) {
+                        Utils.debug.log('error', 'Failed to parse WebSocket message', error);
+                    }
                 }
             };
             
-            this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
-                this.emit('disconnected');
-                this.attemptReconnect(sessionId);
+            this.ws.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                console.log('WebSocket disconnected', { code: event.code, reason: event.reason });
+                this.isConnected = false;
+                this.emit('disconnected', event);
+                
+                // Only attempt reconnect if it wasn't a normal closure
+                if (event.code !== 1000) {
+                    this.attemptReconnect(sessionId);
+                }
             };
             
             this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                clearTimeout(connectionTimeout);
+                console.error('WebSocket connection error:', error);
+                this.isConnected = false;
+                
+                // Log to debug panel
+                if (Utils.debug) {
+                    Utils.debug.log('error', 'WebSocket connection error', error);
+                }
+                
                 this.emit('error', error);
             };
             
         } catch (error) {
-            console.error('Failed to connect WebSocket:', error);
+            console.error('Failed to create WebSocket connection:', error);
             this.emit('error', error);
         }
     }

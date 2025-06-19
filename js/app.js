@@ -16,6 +16,12 @@ class WebsiteGenerator {
         this.bindEvents();
         this.loadSavedData();
         this.setupProgressTracking();
+        
+        // Initialize debug panel
+        Utils.debug.init();
+        
+        // Log app initialization
+        Utils.debug.log('info', 'Website Generator initialized');
     }
     
     bindEvents() {
@@ -67,7 +73,58 @@ class WebsiteGenerator {
         });
         
         this.wsManager.on('error', (error) => {
-            Utils.toast.error('An error occurred during website generation: ' + error.message);
+            console.error('WebSocket error details:', error);
+            
+            // Log to debug panel
+            Utils.debug.log('error', 'WebSocket error occurred', error);
+            
+            // Check if this is a browser-generated WebSocket error (connection failed)
+            if (error && typeof error === 'object' && error.isTrusted === true) {
+                // This is a browser WebSocket connection error - server doesn't support WebSockets
+                console.warn('WebSocket server not available - falling back to polling');
+                Utils.debug.log('info', 'WebSocket server not available, using polling fallback');
+                Utils.debug.log('info', 'Note: WebSocket errors are expected when the server doesn\'t support WebSockets. The app will use polling instead.');
+                
+                // Don't show error toast for WebSocket connection failures
+                // The polling mechanism will handle progress updates
+                return;
+            }
+            
+            // Handle different error types with more detailed logging
+            let errorMessage = 'An error occurred during website generation';
+            
+            if (error && typeof error === 'object') {
+                // Log the full error object for debugging
+                console.error('Full error object:', JSON.stringify(error, null, 2));
+                
+                if (error.message) {
+                    errorMessage += ': ' + error.message;
+                } else if (error.type) {
+                    errorMessage += ': ' + error.type;
+                } else if (error.code) {
+                    errorMessage += ': Error code ' + error.code;
+                } else if (error.data) {
+                    errorMessage += ': ' + (error.data.message || error.data.error || JSON.stringify(error.data));
+                } else if (error.error) {
+                    errorMessage += ': ' + (error.error.message || error.error.type || error.error);
+                } else {
+                    // Try to extract any meaningful information from the error object
+                    const errorKeys = Object.keys(error);
+                    if (errorKeys.length > 0) {
+                        const errorInfo = errorKeys.map(key => `${key}: ${error[key]}`).join(', ');
+                        errorMessage += ': ' + errorInfo;
+                    } else {
+                        errorMessage += ': ' + JSON.stringify(error);
+                    }
+                }
+            } else if (error && typeof error === 'string') {
+                errorMessage += ': ' + error;
+            } else {
+                errorMessage += ': Unknown error occurred';
+            }
+            
+            console.error('Final error message:', errorMessage);
+            Utils.toast.error(errorMessage);
         });
     }
     
@@ -97,8 +154,24 @@ class WebsiteGenerator {
                 this.showProgressSection();
                 this.startProgressTracking();
                 
-                // Connect WebSocket for real-time updates
-                this.wsManager.connect(this.sessionId);
+                // Try to connect WebSocket for real-time updates (optional)
+                this.wsManager.checkWebSocketAvailability().then(isAvailable => {
+                    if (isAvailable) {
+                        try {
+                            this.wsManager.connect(this.sessionId);
+                            Utils.debug.log('info', 'WebSocket server available, connecting for real-time updates');
+                        } catch (wsError) {
+                            console.warn('WebSocket connection failed:', wsError);
+                            Utils.debug.log('info', 'WebSocket connection failed, using polling fallback');
+                        }
+                    } else {
+                        console.info('WebSocket server not available, using polling only');
+                        Utils.debug.log('info', 'WebSocket server not available, using polling fallback');
+                    }
+                }).catch(error => {
+                    console.warn('WebSocket availability check failed:', error);
+                    Utils.debug.log('info', 'WebSocket availability check failed, using polling fallback');
+                });
                 
                 Utils.toast.success('Website generation started successfully!');
             } else {
@@ -107,7 +180,52 @@ class WebsiteGenerator {
             
         } catch (error) {
             console.error('Form submission error:', error);
-            Utils.toast.error('Failed to start website generation: ' + error.message);
+            
+            // Log to debug panel
+            Utils.debug.log('error', 'Form submission failed', error);
+            
+            // Handle different error types with more detailed logging
+            let errorMessage = 'Failed to start website generation';
+            
+            if (error && typeof error === 'object') {
+                // Log the full error object for debugging
+                console.error('Full form submission error object:', JSON.stringify(error, null, 2));
+                
+                if (error.message) {
+                    errorMessage += ': ' + error.message;
+                } else if (error.response && error.response.data) {
+                    const responseData = error.response.data;
+                    if (responseData.message) {
+                        errorMessage += ': ' + responseData.message;
+                    } else if (responseData.error) {
+                        errorMessage += ': ' + responseData.error;
+                    } else {
+                        errorMessage += ': ' + JSON.stringify(responseData);
+                    }
+                } else if (error.status) {
+                    errorMessage += ': HTTP ' + error.status;
+                } else if (error.type) {
+                    errorMessage += ': ' + error.type;
+                } else if (error.code) {
+                    errorMessage += ': Error code ' + error.code;
+                } else {
+                    // Try to extract any meaningful information from the error object
+                    const errorKeys = Object.keys(error);
+                    if (errorKeys.length > 0) {
+                        const errorInfo = errorKeys.map(key => `${key}: ${error[key]}`).join(', ');
+                        errorMessage += ': ' + errorInfo;
+                    } else {
+                        errorMessage += ': ' + JSON.stringify(error);
+                    }
+                }
+            } else if (error && typeof error === 'string') {
+                errorMessage += ': ' + error;
+            } else {
+                errorMessage += ': Unknown error occurred';
+            }
+            
+            console.error('Final form submission error message:', errorMessage);
+            Utils.toast.error(errorMessage);
             this.hideLoadingState();
         }
     }
@@ -333,6 +451,9 @@ class WebsiteGenerator {
                     const { step, progress, message } = response.data;
                     this.progressTracker.updateStep(step, progress, message);
                     
+                    // Log progress to debug panel
+                    Utils.debug.log('progress', `Progress update: ${step} - ${progress}% - ${message}`, response.data);
+                    
                     // Check if completed
                     if (response.data.completed) {
                         clearInterval(this.progressPolling);
@@ -342,11 +463,79 @@ class WebsiteGenerator {
                         const resultsResponse = await API.website.getResults(this.sessionId);
                         if (resultsResponse.success) {
                             this.showResults(resultsResponse.data);
+                        } else {
+                            console.error('Failed to get results:', resultsResponse);
+                            Utils.toast.error('Failed to retrieve website generation results');
                         }
                     }
+                    
+                    // Check if there's an error
+                    if (response.data.error) {
+                        clearInterval(this.progressPolling);
+                        console.error('Progress error:', response.data.error);
+                        Utils.toast.error('Website generation failed: ' + response.data.error);
+                        
+                        // Log error to debug panel
+                        Utils.debug.log('error', 'Website generation failed', {
+                            error: response.data.error,
+                            step: step,
+                            progress: progress
+                        });
+                    }
+                } else {
+                    console.error('Progress response error:', response);
+                    Utils.toast.error('Failed to get progress: ' + (response.message || 'Unknown error'));
+                    
+                    // Log error to debug panel
+                    Utils.debug.log('error', 'Progress polling failed', response);
                 }
             } catch (error) {
-                console.error('Progress polling error:', error);
+                console.error('Progress polling error:', {
+                    error: error.message,
+                    status: error.status,
+                    response: error.response,
+                    fullError: error
+                });
+                
+                // Log to debug panel
+                Utils.debug.log('error', 'Progress polling failed', error);
+                
+                // Log the full error object for debugging
+                console.error('Full progress polling error object:', JSON.stringify(error, null, 2));
+                
+                // Don't show error toast for every polling failure, just log it
+                // Only show error if it's been failing for a while
+                if (!this.pollingErrorCount) {
+                    this.pollingErrorCount = 0;
+                }
+                this.pollingErrorCount++;
+                
+                if (this.pollingErrorCount > 5) {
+                    let errorMessage = 'Lost connection to server. Please refresh the page.';
+                    
+                    // Add more specific error information if available
+                    if (error && typeof error === 'object') {
+                        if (error.message) {
+                            errorMessage += ' Error: ' + error.message;
+                        } else if (error.status) {
+                            errorMessage += ' HTTP Status: ' + error.status;
+                        } else if (error.type) {
+                            errorMessage += ' Type: ' + error.type;
+                        } else if (error.response && error.response.status) {
+                            errorMessage += ' HTTP Status: ' + error.response.status;
+                        } else if (error.response && error.response.data) {
+                            const responseData = error.response.data;
+                            if (responseData.message) {
+                                errorMessage += ' Server Error: ' + responseData.message;
+                            } else if (responseData.error) {
+                                errorMessage += ' Server Error: ' + responseData.error;
+                            }
+                        }
+                    }
+                    
+                    Utils.toast.error(errorMessage);
+                    clearInterval(this.progressPolling);
+                }
             }
         }, 2000);
     }
@@ -562,4 +751,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 });
+
+// Debug panel toggle function
+function toggleDebugPanel() {
+    const panel = document.getElementById('debugPanel');
+    if (panel) {
+        const isVisible = panel.style.display !== 'none';
+        panel.style.display = isVisible ? 'none' : 'block';
+        
+        if (!isVisible) {
+            Utils.debug.log('info', 'Debug panel opened');
+        }
+    }
+}
+
 
