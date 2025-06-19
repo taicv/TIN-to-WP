@@ -10,11 +10,11 @@
  * - Progress tracking
  */
 
-require_once 'config.php';
-require_once '../VietnamBusinessCollector.php';
-require_once '../AIContentGenerator.php';
-require_once '../WordPressIntegrator.php';
-require_once '../ImageManager.php';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/VietnamBusinessCollector.php';
+require_once __DIR__ . '/AIContentGenerator.php';
+require_once __DIR__ . '/WordPressIntegrator.php';
+require_once __DIR__ . '/ImageManager.php';
 
 // Set content type for JSON responses
 header('Content-Type: application/json');
@@ -50,7 +50,6 @@ try {
 // Initialize components
 $businessCollector = new VietnamBusinessCollector();
 $aiGenerator = new AIContentGenerator(OPENAI_API_KEY);
-$wpIntegrator = new WordPressIntegrator();
 $imageManager = new ImageManager([
     'unsplash' => UNSPLASH_ACCESS_KEY,
     'pexels' => PEXELS_API_KEY,
@@ -104,7 +103,7 @@ switch ($action) {
  * Handle website generation request
  */
 function handleWebsiteGeneration($data) {
-    global $pdo, $businessCollector, $aiGenerator, $wpIntegrator, $imageManager;
+    global $pdo, $businessCollector, $aiGenerator, $imageManager;
     
     try {
         // Validate required fields
@@ -227,8 +226,6 @@ function handleGetResults($sessionId) {
  * Handle WordPress connection test
  */
 function handleTestWordPress($data) {
-    global $wpIntegrator;
-    
     try {
         $required_fields = ['wp_url', 'wp_username', 'wp_password'];
         foreach ($required_fields as $field) {
@@ -237,16 +234,19 @@ function handleTestWordPress($data) {
             }
         }
         
-        $result = $wpIntegrator->testConnection(
+        // Create WordPressIntegrator instance with provided credentials
+        $wpIntegrator = new WordPressIntegrator(
             $data['wp_url'],
             $data['wp_username'],
             $data['wp_password']
         );
         
+        $result = $wpIntegrator->testConnection();
+        
         echo json_encode([
             'success' => $result['success'],
-            'message' => $result['message'],
-            'site_info' => $result['site_info'] ?? null
+            'message' => $result['success'] ? 'WordPress connection successful' : $result['error'],
+            'user' => $result['user'] ?? null
         ]);
         
     } catch (Exception $e) {

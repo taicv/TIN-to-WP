@@ -3,6 +3,7 @@
 require_once 'vendor/autoload.php';
 
 use OpenAI\Client;
+use OpenAI\Factory;
 
 class AIContentGenerator {
     private $client;
@@ -10,7 +11,7 @@ class AIContentGenerator {
     private $maxTokens = 4000;
     
     public function __construct($apiKey) {
-        $this->client = OpenAI::client($apiKey);
+        $this->client = (new Factory())->withApiKey($apiKey)->make();
     }
     
     /**
